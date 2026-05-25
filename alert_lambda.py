@@ -2,10 +2,29 @@ import json
 import os
 import urllib.request
 from datetime import datetime
+import boto3
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 TELEGRAM_CHAT_IDS = os.environ.get('TELEGRAM_CHAT_IDS')
+
+_dynamodb = boto3.resource('dynamodb', region_name='us-east-2')
+_user_table = _dynamodb.Table('caboroUserProfile')
+
+
+def get_user_info(from_number: str) -> str:
+    """Returns 'NAME (COMPANY)' or just the number if not found."""
+    try:
+        resp = _user_table.get_item(Key={'WAnumber': from_number})
+        item = resp.get('Item', {})
+        name = item.get('NAME', '')
+        company = item.get('COMPANY', '')
+        if name and company:
+            return f"{name} ({company})"
+        return name or company or from_number
+    except Exception as e:
+        print(f'DynamoDB lookup error: {e}')
+        return from_number
 
 
 def get_telegram_chat_ids():
@@ -67,10 +86,12 @@ def lambda_handler(event, context):
             except Exception:
                 input_data = {}
             from_number = input_data.get('from_number', 'desconocido')
+            user_info = get_user_info(from_number)
             msg_text = input_data.get('message', '')
             preview = (msg_text[:120] + '…') if len(msg_text) > 120 else msg_text
             message = (
-                f"De: {from_number}\n"
+                f"De: {user_info}\n"
+                f"Tel: {from_number}\n"
                 f"Mensaje: {preview}\n"
                 f"Ejecución: {detail.get('name', 'desconocido')}"
             )
@@ -95,8 +116,11 @@ def lambda_handler(event, context):
         send_alert(title, message, severity='WARNING')
     elif alert_type == 'user_feedback':
         title = 'Feedback negativo del usuario'
+        from_number = event.get('user_id', 'desconocido')
+        user_info = get_user_info(from_number)
         message = (
-            f"Usuario: {event.get('user_id', 'desconocido')}\n"
+            f"Usuario: {user_info}\n"
+            f"Tel: {from_number}\n"
             f"Feedback: {event.get('feedback', 'no disponible')}\n"
             f"Contexto: {event.get('context', 'sin contexto')}"
         )
